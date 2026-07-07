@@ -2,7 +2,8 @@
 
 A Streamlit demo application that showcases multimodal semantic search powered by [Elasticsearch](https://www.elastic.co/elasticsearch) and state-of-the-art embedding models.
 
-![Elastic Logo](logo/elastic.png)
+<img src="logo/elastic.png" alt="Elastic Logo" width="48">
+
 
 ---
 
