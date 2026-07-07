@@ -133,7 +133,9 @@ elastic_multimodal_search/
 └── recorded/              # Saved audio recordings (auto-created)
 ```
 
-You can use the images, vidoes inside the directory "searchobj" for trial.
+You can use the images, vidoes inside the directory "searchobj" for trials.
+
+In the directory "demos", it shows some of the search cases.
 
 ---
 
