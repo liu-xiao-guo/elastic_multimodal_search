@@ -2,8 +2,7 @@
 
 A Streamlit demo application that showcases multimodal semantic search powered by [Elasticsearch](https://www.elastic.co/elasticsearch) and state-of-the-art embedding models.
 
-<img src="logo/elastic.png" alt="Elastic Logo" width="48">
-
+![Elastic Logo](logo/elastic-logo-H-full-color-reverse.png)
 
 ---
 
@@ -133,10 +132,6 @@ elastic_multimodal_search/
 ├── multimodal/            # Multimodal dataset
 └── recorded/              # Saved audio recordings (auto-created)
 ```
-
-You can use the images, vidoes inside the directory "searchobj" for trials.
-
-In the directory "demos", it shows some of the search cases.
 
 ---
 

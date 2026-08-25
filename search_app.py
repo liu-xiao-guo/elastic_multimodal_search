@@ -274,11 +274,13 @@ def rerank_multimodal_results(query: str, hits: list[dict]) -> list[dict]:
     return reranked_hits
 
 
-def generate_rag_answer(query: str, hits: list[dict]) -> str:
+def generate_rag_answer(query: str, hits: list[dict]) -> dict:
+    import re
     context_parts = []
     for i, hit in enumerate(hits, start=1):
         passage = hit["_source"].get("source", "")
-        context_parts.append(f"[{i}] {passage}")
+        filename = hit["_source"].get("filename", "")
+        context_parts.append(f"[{i}] ({filename})\n{passage}")
     context = "\n\n".join(context_parts)
 
     client = OpenAI(api_key=OPENROUTER_API_KEY, base_url="https://openrouter.ai/api/v1")
@@ -288,18 +290,28 @@ def generate_rag_answer(query: str, hits: list[dict]) -> str:
             {
                 "role": "system",
                 "content": (
-                    "You are a helpful assistant. Answer the user's question based solely "
-                    "on the provided context passages. Cite passage numbers where relevant. "
-                    "If the answer is not in the context, say so."
+                    "You are a helpful assistant answering questions about a book. "
+                    "Use only the provided passages to answer. "
+                    "Cite passages inline using [1], [2], etc. "
+                    "If the answer cannot be found in the passages, say so. "
+                    "At the very end, on its own line, write exactly: Sources: [n, n, ...]"
                 ),
             },
             {
                 "role": "user",
-                "content": f"Context:\n{context}\n\nQuestion: {query}",
+                "content": f"Passages:\n\n{context}\n\nQuestion: {query}",
             },
         ],
     )
-    return response.choices[0].message.content
+    content = response.choices[0].message.content.strip()
+    lines = content.split("\n")
+    sources: list[int] = []
+    if lines and lines[-1].strip().startswith("Sources:"):
+        sources = [int(n) for n in re.findall(r"\d+", lines[-1])]
+        answer = "\n".join(lines[:-1]).strip()
+    else:
+        answer = content
+    return {"answer": answer, "sources": sources}
 
 
 # ── Multimodal helpers ───────────────────────────────────────────────────────
@@ -652,7 +664,7 @@ elif mode == "🐾 Animals":
             key=f"animal_uploader_{st.session_state.animal_uploader_key}",
         )
         if uploaded is not None:
-            st.image(uploaded, caption=uploaded.name, use_container_width=True)
+            st.image(uploaded, caption=uploaded.name, width=200)
             if uploaded.name != st.session_state.animal_last_upload_name:
                 suffix = Path(uploaded.name).suffix
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -808,9 +820,7 @@ elif mode == "🖼️ Images":
             key=f"image_uploader_{st.session_state.image_uploader_key}",
         )
         if uploaded is not None:
-            col_prev, _ = st.columns([2, 1])
-            with col_prev:
-                st.image(uploaded, caption=uploaded.name, use_container_width=True)
+            st.image(uploaded, caption=uploaded.name, width=200)
             if uploaded.name != st.session_state.image_last_upload_name:
                 suffix = Path(uploaded.name).suffix
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -1113,6 +1123,9 @@ elif mode == "📚 Books":
                 step=0.05,
                 key="book_knn_boost_slider",
             )
+            _l, _r = st.columns(2)
+            _l.caption("← Lexical")
+            _r.caption("Semantic →")
         else:
             knn_boost = 0.5
 
@@ -1336,20 +1349,27 @@ elif mode == "📚 Books":
             if st.session_state.book_rag_answer is None:
                 with st.spinner("Generating answer via OpenRouter…"):
                     st.session_state.book_rag_answer = generate_rag_answer(rag_query, hits)
-            st.markdown(st.session_state.book_rag_answer)
+            rag_result = st.session_state.book_rag_answer if isinstance(st.session_state.book_rag_answer, dict) else {"answer": st.session_state.book_rag_answer, "sources": []}
+            st.markdown(rag_result.get("answer", ""))
             st.divider()
         elif st.session_state.book_use_rag and not rag_query:
             st.info("RAG skipped — transcription was empty.", icon="ℹ️")
+
+        rag_result = st.session_state.book_rag_answer if isinstance(st.session_state.book_rag_answer, dict) else {}
+        rag_sources: set[int] = set(rag_result.get("sources", []))
 
         st.subheader(f"Top {len(hits)} Matches")
         for rank, hit in enumerate(hits, start=1):
             src = hit["_source"]
             score = hit["_score"]
             rerank_score = hit.get("_rerank_score")
+            rag_badge = ""
+            if st.session_state.book_use_rag and rank in rag_sources:
+                rag_badge = " <span style='background:#7B2FBE;color:white;border-radius:4px;padding:1px 6px;font-size:0.75em;'>🤖 RAG source</span>"
             with st.container(border=True):
                 col_info, col_score = st.columns([3, 1])
                 with col_info:
-                    st.markdown(f"**#{rank} &nbsp; `{src['filename']}`**")
+                    st.markdown(f"**#{rank} &nbsp; `{src['filename']}`**{rag_badge}", unsafe_allow_html=True)
                 with col_score:
                     if rerank_score is not None:
                         st.markdown(f"<span style='font-size:0.8em;color:grey;'>Rerank Score</span><br><span style='font-size:1.1em;font-weight:600;'>{rerank_score:.4f}</span>", unsafe_allow_html=True)
@@ -1399,8 +1419,12 @@ elif mode == "📚 Books":
                 with st.spinner("Generating answer via OpenRouter…"):
                     st.session_state.book_rag_answer = generate_rag_answer(query, hits)
 
-            st.markdown(st.session_state.book_rag_answer)
+            rag_result = st.session_state.book_rag_answer if isinstance(st.session_state.book_rag_answer, dict) else {"answer": st.session_state.book_rag_answer, "sources": []}
+            st.markdown(rag_result.get("answer", ""))
             st.divider()
+
+        rag_result = st.session_state.book_rag_answer if isinstance(st.session_state.book_rag_answer, dict) else {}
+        rag_sources: set[int] = set(rag_result.get("sources", []))
 
         # ── Top matches (always shown) ────────────────────────────────────────
         st.subheader(f"Top {len(hits)} Matches")
@@ -1410,11 +1434,14 @@ elif mode == "📚 Books":
             score = hit["_score"]
             rerank_score = hit.get("_rerank_score")
             highlights = hit.get("highlight", {}).get("source", [])
+            rag_badge = ""
+            if st.session_state.book_use_rag and rank in rag_sources:
+                rag_badge = " <span style='background:#7B2FBE;color:white;border-radius:4px;padding:1px 6px;font-size:0.75em;'>🤖 RAG source</span>"
 
             with st.container(border=True):
                 col_info, col_score = st.columns([3, 1])
                 with col_info:
-                    st.markdown(f"**#{rank} &nbsp; `{src['filename']}`**")
+                    st.markdown(f"**#{rank} &nbsp; `{src['filename']}`**{rag_badge}", unsafe_allow_html=True)
                 with col_score:
                     if rerank_score is not None:
                         st.markdown(f"<span style='font-size:0.8em;color:grey;'>Rerank Score</span><br><span style='font-size:1.1em;font-weight:600;'>{rerank_score:.4f}</span>", unsafe_allow_html=True)
@@ -1779,9 +1806,7 @@ elif mode == "🪆 Matryoshka":
             key=f"mry_uploader_{st.session_state.mry_uploader_key}",
         )
         if uploaded is not None:
-            col_prev, _ = st.columns([2, 1])
-            with col_prev:
-                st.image(uploaded, caption=uploaded.name, use_container_width=True)
+            st.image(uploaded, caption=uploaded.name, width=200)
             if uploaded.name != st.session_state.mry_last_upload_name:
                 suffix = Path(uploaded.name).suffix
                 with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
