@@ -1,4 +1,5 @@
 import os
+import json
 import datetime
 import tempfile
 from pathlib import Path
@@ -589,10 +590,25 @@ if mode == "🎵 Music":
             model = load_model()
             embedding = model.encode(st.session_state.music_query_path, task='retrieval')
 
+        knn_query = {
+            "knn": {
+                "field": "embedding",
+                "query_vector": f"[...{len(embedding)}-dimensional float vector...]",
+                "k": TOP_K,
+                "num_candidates": 50,
+            },
+            "_source": ["filename", "song", "style"],
+        }
+
         with st.spinner(f"Searching for top {TOP_K} matches…"):
             hits = search(embedding, MUSIC_INDEX, ["filename", "song", "style"])
 
         st.divider()
+
+        with st.expander("🔍 KNN Search Query", expanded=False):
+            st.caption(f"Index: `{MUSIC_INDEX}` · Elasticsearch KNN vector search")
+            st.code(json.dumps(knn_query, indent=2), language="json")
+
         st.subheader(f"Top {len(hits)} Matches")
 
         for rank, hit in enumerate(hits, start=1):
@@ -730,6 +746,17 @@ elif mode == "🐾 Animals":
             hits = search(cached_emb, ANIMAL_INDEX, ["filename", "animal", "id"])
 
         st.divider()
+        with st.expander("🔍 KNN Search Query", expanded=False):
+            st.caption(f"Index: `{ANIMAL_INDEX}` · Elasticsearch KNN vector search")
+            st.code(json.dumps({
+                "knn": {
+                    "field": "embedding",
+                    "query_vector": f"[...{len(cached_emb)}-dimensional float vector...]",
+                    "k": TOP_K,
+                    "num_candidates": 50,
+                },
+                "_source": ["filename", "animal", "id"],
+            }, indent=2), language="json")
         st.subheader(f"Top {len(hits)} Matches")
 
         cols = st.columns(min(len(hits), 5))
@@ -863,6 +890,17 @@ elif mode == "🖼️ Images":
         hits = st.session_state.image_hits
 
         st.divider()
+        with st.expander("🔍 KNN Search Query", expanded=False):
+            st.caption(f"Index: `{IMAGE_INDEX}` · Elasticsearch KNN vector search (CLIP embeddings)")
+            st.code(json.dumps({
+                "knn": {
+                    "field": "embedding",
+                    "query_vector": f"[...{len(cached_emb)}-dimensional float vector...]",
+                    "k": TOP_K,
+                    "num_candidates": 50,
+                },
+                "_source": ["filename", "category", "id"],
+            }, indent=2), language="json")
 
         if use_rag and hits:
             if st.session_state.image_rag_answer is None:
@@ -1036,6 +1074,17 @@ elif mode == "🎬 Movies":
             hits = search(cached_emb, MOVIE_INDEX, ["filename", "title", "franchise"])
 
         st.divider()
+        with st.expander("🔍 KNN Search Query", expanded=False):
+            st.caption(f"Index: `{MOVIE_INDEX}` · Elasticsearch KNN vector search")
+            st.code(json.dumps({
+                "knn": {
+                    "field": "embedding",
+                    "query_vector": f"[...{len(cached_emb)}-dimensional float vector...]",
+                    "k": TOP_K,
+                    "num_candidates": 50,
+                },
+                "_source": ["filename", "title", "franchise"],
+            }, indent=2), language="json")
         st.subheader(f"Top {len(hits)} Matches")
 
         for rank, hit in enumerate(hits, start=1):
@@ -1342,6 +1391,20 @@ elif mode == "📚 Books":
 
         hits = st.session_state.book_hits
         st.divider()
+        with st.expander("🔍 KNN Search Query", expanded=False):
+            st.caption(f"Index: `{BOOK_INDEX}` · Elasticsearch KNN vector search (audio embedding → semantic)")
+            _book_rec_emb = st.session_state.book_embedding_cache[1]
+            _book_rec_dims = len(_book_rec_emb) if _book_rec_emb is not None else "?"
+            st.code(json.dumps({
+                "knn": {
+                    "field": "inference_field",
+                    "query_vector": f"[...{_book_rec_dims}-dimensional float vector...]",
+                    "k": st.session_state.book_top_k,
+                    "num_candidates": st.session_state.book_top_k * 10,
+                },
+                "_source": ["filename", "source"],
+                "size": st.session_state.book_top_k,
+            }, indent=2), language="json")
 
         if st.session_state.book_use_rag and rag_query:
             st.subheader("🤖 RAG Answer")
@@ -1410,6 +1473,46 @@ elif mode == "📚 Books":
         hits = st.session_state.book_hits
 
         st.divider()
+        with st.expander("🔍 Search Query", expanded=False):
+            _bst = st.session_state.book_search_type
+            _bmth = st.session_state.book_hybrid_method
+            _btopk = st.session_state.book_top_k
+            _bboost = st.session_state.book_knn_boost
+            _beng = st.session_state.book_use_english
+            _btf = "english_source" if _beng else "source"
+            _bcemb = st.session_state.book_embedding_cache[1]
+            _bdims = len(_bcemb) if _bcemb is not None else "?"
+            _bknn = {
+                "field": "inference_field",
+                "query_vector": f"[...{_bdims}-dimensional float vector...]",
+                "k": _btopk,
+                "num_candidates": _btopk * 10,
+            }
+            if _bst == "semantic":
+                st.caption(f"Index: `{BOOK_INDEX}` · Semantic KNN vector search")
+                _bq = {"knn": _bknn, "_source": ["filename", "source"], "size": _btopk}
+            elif _bst == "lexical":
+                st.caption(f"Index: `{BOOK_INDEX}` · Lexical BM25 search")
+                _bq = {"query": {"match": {_btf: {"query": query}}}, "_source": ["filename", "source"], "size": _btopk}
+            elif _bmth == "rrf":
+                st.caption(f"Index: `{BOOK_INDEX}` · Hybrid search — RRF (BM25 + KNN)")
+                _bq = {
+                    "query": {"match": {_btf: {"query": query}}},
+                    "knn": _bknn,
+                    "rank": {"rrf": {"rank_window_size": _btopk * 10, "rank_constant": 60}},
+                    "_source": ["filename", "source"],
+                    "size": _btopk,
+                }
+            else:
+                _bbm25 = round(1.0 - _bboost, 4)
+                st.caption(f"Index: `{BOOK_INDEX}` · Hybrid search — Linear (KNN boost={_bboost}, BM25 boost={_bbm25})")
+                _bq = {
+                    "query": {"match": {_btf: {"query": query, "boost": _bbm25}}},
+                    "knn": {**_bknn, "boost": _bboost},
+                    "_source": ["filename", "source"],
+                    "size": _btopk,
+                }
+            st.code(json.dumps(_bq, indent=2), language="json")
 
         if st.session_state.book_use_rag:
             # ── RAG answer ────────────────────────────────────────────────────
@@ -1634,6 +1737,17 @@ elif mode == "🌐 Multimodal":
             else st.session_state.mm_raw_hits
         )
         st.divider()
+        with st.expander("🔍 KNN Search Query", expanded=False):
+            st.caption(f"Index: `{MULTIMODAL_INDEX}` · Elasticsearch KNN vector search")
+            st.code(json.dumps({
+                "knn": {
+                    "field": "embedding",
+                    "query_vector": f"[...{len(cached_emb)}-dimensional float vector...]",
+                    "k": TOP_K,
+                    "num_candidates": 50,
+                },
+                "_source": ["filename", "file_path", "media_type", "content"],
+            }, indent=2), language="json")
 
         # ── RAG answer ────────────────────────────────────────────────────────
         if use_rag and hits:
@@ -1877,6 +1991,18 @@ elif mode == "🪆 Matryoshka":
         hits = st.session_state.mry_hits
         if hits:
             st.divider()
+            with st.expander("🔍 KNN Search Query", expanded=False):
+                idx_name = f"matryoshka_{dims}_embeddings"
+                st.caption(f"Index: `{idx_name}` · Elasticsearch KNN vector search ({dims}-dim truncated embedding)")
+                st.code(json.dumps({
+                    "knn": {
+                        "field": "embedding",
+                        "query_vector": f"[...{dims}-dimensional float vector (truncated from full embedding)...]",
+                        "k": TOP_K,
+                        "num_candidates": 50,
+                    },
+                    "_source": ["filename", "animal", "id"],
+                }, indent=2), language="json")
             st.subheader(f"Top {len(hits)} Matches — {dims}-dim index")
 
             cols = st.columns(min(len(hits), 5))
