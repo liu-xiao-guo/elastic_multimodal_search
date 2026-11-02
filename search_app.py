@@ -2032,7 +2032,7 @@ elif mode == "🔤 Embeddings":
     st.subheader("🔤 Word Embedding Visualizer")
     st.caption(
         "Enter words to visualise their semantic distances using "
-        f"**{EMBEDDINGS_V4_MODEL}**, projected with PCA or t-SNE."
+        f"**{EMBEDDINGS_V4_MODEL}**, projected onto a sphere, with PCA, or with t-SNE."
     )
 
     _EMB_CATEGORY_COLORS = {
@@ -2130,9 +2130,10 @@ elif mode == "🔤 Embeddings":
         with col_proj:
             projection = st.radio(
                 "Projection",
-                ["PCA", "t-SNE"],
+                ["Spherical", "PCA", "t-SNE"],
                 horizontal=True,
-                help="t-SNE preserves local neighbourhood structure: similar words cluster together.",
+                help="Spherical: PCA→3D then projected onto the unit sphere; arcs are great-circle (angular) distances. "
+                     "t-SNE preserves local neighbourhood structure: similar words cluster together.",
             )
         with col_thr:
             edge_thr = st.slider(
@@ -2142,7 +2143,8 @@ elif mode == "🔤 Embeddings":
             )
 
         # ── Compute coordinates ───────────────────────────────────────────────
-        if projection == "PCA":
+        is_sph = projection == "Spherical"
+        if projection in ("Spherical", "PCA"):
             n_comp3 = min(3, n)
             pca3 = PCA(n_components=n_comp3)
             c3_raw = pca3.fit_transform(embeddings)
@@ -2155,6 +2157,17 @@ elif mode == "🔤 Embeddings":
             ax2 = [f"PC1 ({ev2[0]:.1f}%)", f"PC2 ({ev2[1]:.1f}%)"]
             sub3 = f"Explained variance: {ev3[0]:.1f}% + {ev3[1]:.1f}% + {ev3[2]:.1f}% = {ev3[:3].sum():.1f}%"
             sub2 = f"Explained variance: {ev2[0]:.1f}% + {ev2[1]:.1f}% = {ev2.sum():.1f}%"
+            if is_sph:
+                # Push every point onto the unit sphere / unit circle.
+                _n3 = np.linalg.norm(coords3, axis=1, keepdims=True)
+                coords3 = coords3 / np.where(_n3 == 0, 1, _n3)
+                _n2 = np.linalg.norm(coords2, axis=1, keepdims=True)
+                coords2 = coords2 / np.where(_n2 == 0, 1, _n2)
+                ax3 = ["x", "y", "z"]
+                ax2 = ["x", "y"]
+                sub3 = (f"PCA→3D, projected onto the unit sphere | Variance kept: {ev3[:3].sum():.1f}% | "
+                        "Arcs = great-circle (angular) distance")
+                sub2 = f"PCA→2D, projected onto the unit circle | Variance kept: {ev2.sum():.1f}%"
         else:
             from sklearn.manifold import TSNE as _TSNE
             _perp = float(max(2, min(n - 1, 5)))
@@ -2183,7 +2196,46 @@ elif mode == "🔤 Embeddings":
         for _i, _w in enumerate(words):
             cat_idx.setdefault(_EMB_WORD_CATEGORIES.get(_w, "other"), []).append(_i)
 
+        def _slerp(a, b, k=40):
+            """Points along the great-circle arc (shortest path) from a to b."""
+            omega = np.arccos(np.clip(np.dot(a, b), -1.0, 1.0))
+            if omega < 1e-8:
+                return np.repeat(a[None, :], k, axis=0)
+            t = np.linspace(0, 1, k)[:, None]
+            return (np.sin((1 - t) * omega) * a + np.sin(t * omega) * b) / np.sin(omega)
+
+        def _add_sphere_3d(fig):
+            u = np.linspace(0, 2 * np.pi, 60)
+            v = np.linspace(0, np.pi, 30)
+            fig.add_trace(go.Surface(
+                x=np.outer(np.cos(u), np.sin(v)), y=np.outer(np.sin(u), np.sin(v)),
+                z=np.outer(np.ones_like(u), np.cos(v)),
+                showscale=False, opacity=0.12,
+                colorscale=[[0, "#cfd8e6"], [1, "#cfd8e6"]],
+                hoverinfo="skip", showlegend=False,
+                lighting=dict(ambient=1.0, diffuse=0.0),
+            ))
+            xs, ys, zs = [], [], []
+            t = np.linspace(0, 2 * np.pi, 100)
+            for lat in range(-60, 61, 30):
+                r, z = np.cos(np.radians(lat)), np.sin(np.radians(lat))
+                xs += list(r * np.cos(t)) + [None]
+                ys += list(r * np.sin(t)) + [None]
+                zs += [z] * 100 + [None]
+            p_ = np.linspace(0, np.pi, 100)
+            for lon in range(0, 180, 30):
+                l_ = np.radians(lon)
+                xs += list(np.sin(p_) * np.cos(l_)) + [None]
+                ys += list(np.sin(p_) * np.sin(l_)) + [None]
+                zs += list(np.cos(p_)) + [None]
+            fig.add_trace(go.Scatter3d(
+                x=xs, y=ys, z=zs, mode="lines", showlegend=False, hoverinfo="skip",
+                line=dict(color="#c5cdd9", width=1),
+            ))
+
         def _add_hulls_3d(fig):
+            if is_sph:
+                return
             for cat, idx_list in cat_idx.items():
                 if len(idx_list) < 4:
                     continue
@@ -2225,6 +2277,18 @@ elif mode == "🔤 Embeddings":
                     _s = float(sim_matrix[_i, _j])
                     if _s < edge_thr:
                         continue
+                    if is_sph:
+                        # Great-circle arc, slightly above the surface so it isn't hidden.
+                        arc = _slerp(coords3[_i], coords3[_j]) * 1.004
+                        _ang = float(np.degrees(np.arccos(np.clip(_s, -1.0, 1.0))))
+                        fig.add_trace(go.Scatter3d(
+                            x=arc[:, 0], y=arc[:, 1], z=arc[:, 2],
+                            mode="lines", showlegend=False, opacity=0.60,
+                            line=dict(color=_sim_color(_s), width=1.0 + 3.0 * _s),
+                            hovertemplate=(f"{words[_i]} ↔ {words[_j]}<br>similarity: {_s:.3f}<br>"
+                                           f"geodesic: {_ang:.1f}°<extra></extra>"),
+                        ))
+                        continue
                     fig.add_trace(go.Scatter3d(
                         x=[coords3[_i, 0], coords3[_j, 0]],
                         y=[coords3[_i, 1], coords3[_j, 1]],
@@ -2253,6 +2317,8 @@ elif mode == "🔤 Embeddings":
         # ── 3D ────────────────────────────────────────────────────────────────
         with tab3d:
             fig3d = go.Figure()
+            if is_sph:
+                _add_sphere_3d(fig3d)  # sphere body + lat/long grid
             _add_hulls_3d(fig3d)   # layer 0: category volume hulls
             _add_edges_3d(fig3d)   # layer 1: similarity-filtered coloured edges
             pt_start = len(fig3d.data)   # points start here
@@ -2282,12 +2348,18 @@ elif mode == "🔤 Embeddings":
                           f"<sup>Model: {EMBEDDINGS_V4_MODEL} | {sub3}</sup>"),
                     x=0.5,
                 ),
-                scene=dict(
-                    xaxis_title=ax3[0], yaxis_title=ax3[1], zaxis_title=ax3[2],
-                    xaxis=dict(backgroundcolor="#f8f9fa", gridcolor="white"),
-                    yaxis=dict(backgroundcolor="#f0f3fa", gridcolor="white"),
-                    zaxis=dict(backgroundcolor="#f5f0fa", gridcolor="white"),
-                    camera=dict(eye=dict(x=0.7, y=0.7, z=0.7)),
+                scene=(
+                    dict(
+                        xaxis=dict(visible=False), yaxis=dict(visible=False),
+                        zaxis=dict(visible=False), aspectmode="cube",
+                        camera=dict(eye=dict(x=1.1, y=1.1, z=0.75)),
+                    ) if is_sph else dict(
+                        xaxis_title=ax3[0], yaxis_title=ax3[1], zaxis_title=ax3[2],
+                        xaxis=dict(backgroundcolor="#f8f9fa", gridcolor="white"),
+                        yaxis=dict(backgroundcolor="#f0f3fa", gridcolor="white"),
+                        zaxis=dict(backgroundcolor="#f5f0fa", gridcolor="white"),
+                        camera=dict(eye=dict(x=0.7, y=0.7, z=0.7)),
+                    )
                 ),
                 legend=dict(title="Words", x=1.02, y=0.98, xanchor="left", yanchor="top"),
                 margin=dict(l=0, r=140, t=80, b=0),
@@ -2315,6 +2387,12 @@ elif mode == "🔤 Embeddings":
         with tab2d:
             textpos2d = _smart_textpos_2d(coords2)
             fig2d = go.Figure()
+            if is_sph:
+                _th = np.linspace(0, 2 * np.pi, 200)
+                fig2d.add_trace(go.Scatter(
+                    x=np.cos(_th), y=np.sin(_th), mode="lines", showlegend=False,
+                    hoverinfo="skip", line=dict(color="#c5cdd9", width=1.5),
+                ))
             _add_hulls_2d(fig2d)   # layer 0: category convex-hull shading
             _add_edges_2d(fig2d)   # layer 1: similarity-filtered coloured edges
             pt_start_2d = len(fig2d.data)
@@ -2350,6 +2428,8 @@ elif mode == "🔤 Embeddings":
                 margin=dict(l=60, r=150, t=80, b=60),
                 height=640,
             )
+            if is_sph:
+                fig2d.update_yaxes(scaleanchor="x", scaleratio=1)
             st.plotly_chart(fig2d, use_container_width=True)
             st.caption(
                 "**Bubble size** = average cosine similarity to all other words. "

@@ -17,7 +17,7 @@ The app provides eight search modes, each backed by a dedicated Elasticsearch in
 | 📚 **Books** | Lexical, semantic, hybrid, or audio-recorded search with optional RAG | `book_embeddings` |
 | 🌐 **Multimodal** | Cross-modal search across text, image, and audio | `multimodal-embeddings` |
 | 🪆 **Matryoshka** | Demonstrate Matryoshka embedding truncation at 128 / 256 / 512 / 1024 dims | `music_embeddings` |
-| 🔤 **Embeddings** | Interactive 3D / 2D word embedding visualizer with PCA and t-SNE | *(in-memory)* |
+| 🔤 **Embeddings** | Interactive 3D / 2D word embedding visualizer with Spherical, PCA and t-SNE | *(in-memory)* |
 
 ### Search capabilities
 
